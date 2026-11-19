@@ -309,7 +309,12 @@ def test_the_writer_keeps_a_symlinked_config_a_symlink(tmp_path, yaml_file):
     real = tmp_path / "real.yaml"
     real.write_bytes(yaml_file.read_bytes())
     link = tmp_path / "sellbird.local.yaml"
-    link.symlink_to(real)
+    try:
+        link.symlink_to(real)
+    except OSError as exc:
+        if getattr(exc, 'winerror', None) == 1314:
+            pytest.skip('Windows symlink privilege unavailable (WinError 1314)')
+        raise
     set_require_approval(False, link)
     assert link.is_symlink()
     assert load_config(str(real)).channels.email.require_approval is False

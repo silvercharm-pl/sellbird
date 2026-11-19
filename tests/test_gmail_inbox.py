@@ -60,7 +60,28 @@ async def test_heartbeat_does_not_send_until_gmail_recovers(monkeypatch, tmp_pat
     # The shared harness routes Claude to a canned local Python response,
     # not a model/CLI service. Its mail send only appends to an in-memory list.
     from tests.test_codex_e2e import Harness, _approved_item
+    # Block synchronous, DNS and Windows Proactor async network paths.
+    import asyncio
+    import socket
+    network_attempts = []
+    def block_network(*args, **kwargs):
+        network_attempts.append((args, kwargs))
+        raise AssertionError('Network access forbidden in Gmail safety test')
+    async def block_async_network(*args, **kwargs):
+        return block_network(*args, **kwargs)
+    monkeypatch.setattr(socket.socket, 'connect', block_network)
+    monkeypatch.setattr(socket.socket, 'connect_ex', block_network)
+    monkeypatch.setattr(socket, 'getaddrinfo', block_network)
+    monkeypatch.setattr(socket, 'create_connection', block_network)
+    monkeypatch.setattr(asyncio.BaseEventLoop, 'create_connection', block_async_network)
+    monkeypatch.setattr(asyncio.BaseEventLoop, 'sock_connect', block_async_network)
     sellbird = Harness(monkeypatch, tmp_path, provider='claude', model='')
+    # Gmail is a native provider; SMTP cannot exercise inbox-first send gating.
+    sellbird.config.channels.email.provider = 'gmail'
+    # Offline heartbeat fixture must not inherit the operator's live Claude quota.
+    import sellbird.brain as brain_mod
+    budget_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(brain_mod.Brain, 'is_within_budget', budget_mock)
     await sellbird.state.init_db()
     await _approved_item(sellbird.state)
     gmail = provider([None, {'resultSizeEstimate': 0}])
@@ -71,6 +92,9 @@ async def test_heartbeat_does_not_send_until_gmail_recovers(monkeypatch, tmp_pat
     await sellbird.run_cycles(2, between={1: after_failure})
     assert seen['sent'] == []
     assert [m['to'] for m in sellbird.mail.sent] == ['bob@beta.com']
+    budget_mock.assert_awaited()
+    assert network_attempts == []
+    assert gmail._request.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -127,7 +151,28 @@ async def test_http_failures_do_not_become_an_empty_inbox(monkeypatch, status, b
 @pytest.mark.asyncio
 async def test_second_page_opt_out_cancels_approved_send(monkeypatch, tmp_path):
     from tests.test_codex_e2e import Harness, _approved_item
+    # Block synchronous, DNS and Windows Proactor async network paths.
+    import asyncio
+    import socket
+    network_attempts = []
+    def block_network(*args, **kwargs):
+        network_attempts.append((args, kwargs))
+        raise AssertionError('Network access forbidden in Gmail safety test')
+    async def block_async_network(*args, **kwargs):
+        return block_network(*args, **kwargs)
+    monkeypatch.setattr(socket.socket, 'connect', block_network)
+    monkeypatch.setattr(socket.socket, 'connect_ex', block_network)
+    monkeypatch.setattr(socket, 'getaddrinfo', block_network)
+    monkeypatch.setattr(socket, 'create_connection', block_network)
+    monkeypatch.setattr(asyncio.BaseEventLoop, 'create_connection', block_async_network)
+    monkeypatch.setattr(asyncio.BaseEventLoop, 'sock_connect', block_async_network)
     sellbird = Harness(monkeypatch, tmp_path, provider='claude', model='')
+    # Gmail is a native provider; SMTP cannot exercise inbox-first send gating.
+    sellbird.config.channels.email.provider = 'gmail'
+    # Offline heartbeat fixture must not inherit the operator's live Claude quota.
+    import sellbird.brain as brain_mod
+    budget_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(brain_mod.Brain, 'is_within_budget', budget_mock)
     await sellbird.state.init_db()
     await _approved_item(sellbird.state)
     gmail = provider([
@@ -141,6 +186,9 @@ async def test_second_page_opt_out_cancels_approved_send(monkeypatch, tmp_path):
     assert sellbird.mail.sent == []
     assert await sellbird.state.is_reply_processed('stop')
     assert len(await sellbird.state.get_outbox(status='cancelled')) == 1
+    budget_mock.assert_awaited()
+    assert network_attempts == []
+    assert gmail._request.await_count == 4
 
 
 @pytest.mark.asyncio
